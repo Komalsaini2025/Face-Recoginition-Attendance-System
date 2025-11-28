@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit as st
 import face_recognition
 import numpy as np
 import pandas as pd
@@ -9,8 +10,6 @@ import os
 import pyttsx3
 import threading
 import time
-from streamlit_webrtc import webrtc_streamer, VideoTransformerBase, WebRtcMode
-import av
 
 ENCODINGS_FILE = 'face_encodings.pkl'
 ATTENDANCE_FILE = 'attendance.csv'
@@ -25,21 +24,11 @@ def speak(text):
         except Exception as e:
             st.error(f"Error in text-to-speech: {e}")
 
+    # Run the speaking function in a separate thread
     thread = threading.Thread(target=run_speak, daemon=True)
     thread.start()
 
-
-# Helper to safely rerun Streamlit (some Streamlit builds remove experimental_rerun)
-def safe_rerun():
-    try:
-        st.experimental_rerun()
-    except Exception:
-        try:
-            st.experimental_set_query_params(_ts=int(time.time()))
-        except Exception:
-            # last resort: toggle a session-state flag (may not force rerun)
-            st.session_state['_rerun_trigger'] = not st.session_state.get('_rerun_trigger', False)
-
+# Note: persist attendance and spoken names in Streamlit session state
 
 # Load known encodings and names if available
 if os.path.exists(ENCODINGS_FILE):
@@ -54,7 +43,6 @@ def mark_attendance(name):
     now = datetime.now()
     date_str = now.strftime('%Y-%m-%d')
     time_str = now.strftime('%H:%M:%S')
-
     attendance = st.session_state.attendance_log
 
     # Check if attendance is already marked for the person on the same date
@@ -70,49 +58,37 @@ def mark_attendance(name):
 
 # Function to save attendance to a CSV file
 def save_attendance():
-    # Prevent concurrent saves
-    if st.session_state.get('saving', False):
-        st.info("Save already in progress. Please wait...")
-        return
-
     attendance = st.session_state.attendance_log
     if not attendance:
         st.warning("No attendance to save.")
         return
 
-    st.session_state['saving'] = True
-    try:
-        # Create DataFrame
-        attendance_df = pd.DataFrame(attendance, columns=["Name", "Time", "Date"])
+    # Create DataFrame
+    attendance_df = pd.DataFrame(attendance, columns=["Name", "Time", "Date"])
 
-        # Check if the attendance file exists
-        if os.path.exists(ATTENDANCE_FILE):
-            existing_df = pd.read_csv(ATTENDANCE_FILE)
-            attendance_df = pd.concat([existing_df, attendance_df]).drop_duplicates()
+    # Check if the attendance file exists
+    if os.path.exists(ATTENDANCE_FILE):
+        existing_df = pd.read_csv(ATTENDANCE_FILE)
+        attendance_df = pd.concat([existing_df, attendance_df]).drop_duplicates()
 
-        # Save the updated DataFrame
-        attendance_df.to_csv(ATTENDANCE_FILE, index=False)
-        st.success("Attendance saved successfully!")
-        speak("Attendance saved successfully. Thank you!")
-
-        # Clear saved entries so a single click only saves once
-        st.session_state.attendance_log = []
-    except Exception as e:
-        st.error(f"Error saving attendance: {e}")
-    finally:
-        st.session_state['saving'] = False
+    # Save the updated DataFrame
+    attendance_df.to_csv(ATTENDANCE_FILE, index=False)
+    st.success("Attendance saved successfully!")
+    speak("Attendance saved successfully. Thank you!")
 
 # Function to register a new face
 def register_new_face(face_encoding, name):
-    st.session_state.known_encodings.append(face_encoding)
-    st.session_state.known_names.append(name)
+    known_encodings.append(face_encoding)
+    known_names.append(name)
     with open(ENCODINGS_FILE, 'wb') as f:
-        pickle.dump((st.session_state.known_encodings, st.session_state.known_names), f)
+        pickle.dump((known_encodings, known_names), f)
     st.success(f"New face registered for {name}.")
 
+# Streamlit UI
 st.title("Face Recognition Attendance System")
 st.write("Welcome to the Face Recognition Attendance App")
 
+# Use session state to ensure the welcome message is spoken only once
 if "has_spoken_welcome" not in st.session_state:
     st.session_state.has_spoken_welcome = False
 
@@ -134,158 +110,128 @@ if "attendance_log" not in st.session_state:
 if "spoken_names" not in st.session_state:
     st.session_state.spoken_names = set()
 
-# Use streamlit-webrtc for real-time, non-blocking video processing
+cap = cv2.VideoCapture(0)
 
-# Shared state between the transformer thread and the Streamlit main thread
-shared_state = {
-    'attendance': [],  # entries appended by transformer: [name, time_str, date_str]
-    'pending': [],     # entries appended by transformer: {id, encoding, image_bytes, added_at}
-    'lock': threading.Lock(),
-}
+if not cap.isOpened():
+    st.error("Error: Could not open camera.")
+else:
+    ret, frame = cap.read()
+
+    if ret:
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+        # Detect faces in the frame
+        face_locations = face_recognition.face_locations(rgb_frame)
+        face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
+
+        if face_encodings:
+            for face_encoding, face_location in zip(face_encodings, face_locations):
+                # Use a stricter tolerance for face matching
+                TOLERANCE = 0.45
+                matches = face_recognition.compare_faces(st.session_state.known_encodings, face_encoding, tolerance=TOLERANCE)
+                face_distances = face_recognition.face_distance(st.session_state.known_encodings, face_encoding)
 
 
-class FaceTransformer(VideoTransformerBase):
-    def __init__(self):
-        self.frame_counter = 0
-
-    def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
-        img = frame.to_ndarray(format="bgr24")
-        self.frame_counter += 1
-
-        # only process every Nth frame to save CPU
-        PROCESS_EVERY_N = 3
-        FRAME_SCALE = 0.5
-
-        if self.frame_counter % PROCESS_EVERY_N == 0:
-            try:
-                small = cv2.resize(img, (0, 0), fx=FRAME_SCALE, fy=FRAME_SCALE)
-                face_locations = face_recognition.face_locations(small)
-                face_encodings = face_recognition.face_encodings(small, face_locations)
-
-                for face_encoding, face_location in zip(face_encodings, face_locations):
-                    # check against known encodings
-                    is_known = False
-                    name = None
-                    if st.session_state.get('known_encodings'):
-                        try:
-                            matches = face_recognition.compare_faces(st.session_state.known_encodings, face_encoding, tolerance=0.45)
-                            face_distances = face_recognition.face_distance(st.session_state.known_encodings, face_encoding)
-                            if len(face_distances) > 0 and matches[np.argmin(face_distances)] and face_distances[np.argmin(face_distances)] < 0.45:
-                                best_match_index = np.argmin(face_distances)
-                                name = st.session_state.known_names[best_match_index]
-                                is_known = True
-                        except Exception:
-                            is_known = False
-
-                    if is_known and name:
-                        # mark attendance into shared_state (main thread will sync)
-                        now = datetime.now()
-                        date_str = now.strftime('%Y-%m-%d')
-                        time_str = now.strftime('%H:%M:%S')
-                        with shared_state['lock']:
-                            shared_state['attendance'].append([name, time_str, date_str])
-                        # draw box on original-sized image
-                        top, right, bottom, left = [int(x / FRAME_SCALE) for x in face_location]
-                        cv2.rectangle(img, (left, top), (right, bottom), (0, 255, 0), 2)
-                        cv2.putText(img, name, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                if len(face_distances) > 0:
+                    best_match_index = np.argmin(face_distances)
+                    if matches[best_match_index] and face_distances[best_match_index] < TOLERANCE:
+                        name = st.session_state.known_names[best_match_index]
+                        mark_attendance(name)
+                        # Draw a rectangle and label for recognized face
+                        top, right, bottom, left = face_location
+                        cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
+                        cv2.putText(
+                            frame,
+                            name,
+                            (left, top - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.8,
+                            (0, 255, 0),
+                            2,
+                        )
                     else:
-                        # unknown: create pending registration entry
-                        top_s, right_s, bottom_s, left_s = face_location
-                        top, right, bottom, left = [int(top_s / FRAME_SCALE), int(right_s / FRAME_SCALE), int(bottom_s / FRAME_SCALE), int(left_s / FRAME_SCALE)]
-                        h, w = img.shape[:2]
-                        top_i, right_i, bottom_i, left_i = max(0, top), min(w, right), min(h, bottom), max(0, left)
-                        if bottom_i > top_i and right_i > left_i:
-                            try:
-                                crop = img[top_i:bottom_i, left_i:right_i]
-                                _, buf = cv2.imencode('.jpg', cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
-                                image_bytes = buf.tobytes()
-                            except Exception:
-                                image_bytes = None
-                        else:
-                            image_bytes = None
+                        # Unknown face: add to pending registrations (debounced)
+                        # Crop the face from the frame to show to the user
+                        top, right, bottom, left = face_location
+                        # ensure coordinates are ints and within frame bounds
+                        h, w = frame.shape[:2]
+                        top_i, right_i, bottom_i, left_i = map(int, [max(0, top), min(w, right), min(h, bottom), max(0, left)])
+                        try:
+                            crop = frame[top_i:bottom_i, left_i:right_i]
+                        except Exception:
+                            crop = None
 
-                        # dedupe by comparing encodings
+                        # Encode crop to bytes so it can be stored in session state
+                        image_bytes = None
+                        if crop is not None and crop.size > 0:
+                            _, img_buf = cv2.imencode('.jpg', cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
+                            image_bytes = img_buf.tobytes()
+
+                        # Create an id for this pending registration
+                        pending_id = f"unknown_{int(time.time()*1000)}"
+
+                        # Avoid adding many duplicates: compare to existing pending by distance
                         add_pending = True
-                        with shared_state['lock']:
-                            for p in shared_state['pending']:
-                                try:
-                                    dist = np.linalg.norm(p['encoding'] - face_encoding)
-                                    if dist < 0.45:
-                                        add_pending = False
-                                        break
-                                except Exception:
-                                    continue
-                            if add_pending:
-                                shared_state['pending'].append({
-                                    'id': f"unknown_{int(time.time()*1000)}",
-                                    'encoding': face_encoding,
-                                    'image_bytes': image_bytes,
-                                    'added_at': time.time(),
-                                })
+                        for p in st.session_state.pending_registrations:
+                            try:
+                                dist = np.linalg.norm(p['encoding'] - face_encoding)
+                                if dist < 0.45:
+                                    add_pending = False
+                                    break
+                            except Exception:
+                                continue
 
-                        # draw unknown box
-                        cv2.rectangle(img, (left, top), (right, bottom), (0, 0, 255), 2)
-                        cv2.putText(img, "Unknown", (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-            except Exception as e:
-                # avoid crashing transformer thread
-                print(f"Transformer error: {e}")
+                        if add_pending:
+                            st.session_state.pending_registrations.append({
+                                'id': pending_id,
+                                'encoding': face_encoding,
+                                'image_bytes': image_bytes,
+                                'added_at': time.time(),
+                            })
 
-        # return a VideoFrame
-        return av.VideoFrame.from_ndarray(img, format="bgr24")
+                        # Draw a rectangle for unknown face
+                        top, right, bottom, left = face_location
+                        cv2.rectangle(frame, (left, top), (right, bottom), (0, 0, 255), 2)
+                        cv2.putText(
+                            frame,
+                            "Unknown",
+                            (left, top - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.8,
+                            (0, 0, 255),
+                            2,
+                        )
 
+            st.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), caption="Processed Image")
 
-# Start the webrtc streamer with the transformer
-webrtc_ctx = webrtc_streamer(
-    key="face-recog-stream",
-    mode=WebRtcMode.SENDRECV,
-    video_transformer_factory=FaceTransformer,
-    media_stream_constraints={"video": True, "audio": False},
-)
+            # Show UI for any pending registrations
+            if st.session_state.pending_registrations:
+                st.markdown("### Pending Registrations")
+                # Render each pending registration with its image and a name input + register button
+                for p in list(st.session_state.pending_registrations):
+                    col1, col2 = st.columns([1, 2])
+                    with col1:
+                        if p.get('image_bytes'):
+                            st.image(p['image_bytes'], caption="Unknown Face", use_column_width=True)
+                        else:
+                            st.write("No preview available")
+                    with col2:
+                        name_key = f"name_{p['id']}"
+                        btn_key = f"btn_{p['id']}"
+                        new_name = st.text_input("Enter name to register", key=name_key)
+                        if st.button("Register & Mark Attendance", key=btn_key):
+                            if new_name:
+                                register_new_face(p['encoding'], new_name)
+                                mark_attendance(new_name)
+                                # remove from pending
+                                st.session_state.pending_registrations = [x for x in st.session_state.pending_registrations if x['id'] != p['id']]
+                                st.experimental_rerun()
+                            else:
+                                st.warning("Please enter a name before registering.")
+        else:
+            st.warning("No faces detected. Please try again.")
 
-# Sync shared_state -> st.session_state on each rerun
-with shared_state['lock']:
-    # move new attendance items
-    if shared_state['attendance']:
-        if 'attendance_log' not in st.session_state:
-            st.session_state.attendance_log = []
-        for entry in shared_state['attendance']:
-            if not any(e[0] == entry[0] and e[2] == entry[2] for e in st.session_state.attendance_log):
-                st.session_state.attendance_log.append(entry)
-        shared_state['attendance'].clear()
-
-    # move pending registrations into session_state
-    if shared_state['pending']:
-        if 'pending_registrations' not in st.session_state:
-            st.session_state.pending_registrations = []
-        # append only new ids
-        existing_ids = {p['id'] for p in st.session_state.pending_registrations}
-        for p in shared_state['pending']:
-            if p['id'] not in existing_ids:
-                st.session_state.pending_registrations.append(p)
-        shared_state['pending'].clear()
-    else:
-        st.warning("No frames received from camera. Try restarting the camera.")
-
-# Camera controls
-col_a, col_b = st.columns(2)
-with col_a:
-    if st.button("Stop Camera"):
-        try:
-            if "video_cap" in st.session_state and st.session_state.video_cap.isOpened():
-                st.session_state.video_cap.release()
-        except Exception:
-            pass
-        st.success("Camera stopped.")
-with col_b:
-    if st.button("Restart Camera"):
-        try:
-            # release if exists then recreate
-            if "video_cap" in st.session_state and st.session_state.video_cap.isOpened():
-                st.session_state.video_cap.release()
-        except Exception:
-            pass
-        st.session_state.video_cap = cv2.VideoCapture(0)
-        safe_rerun()
+        cap.release()
 
 if st.button("Save Attendance"):
     save_attendance()
@@ -296,3 +242,4 @@ if st.button("View Attendance Log"):
         st.dataframe(attendance_df)
     else:
         st.info("No attendance records found.")
+
