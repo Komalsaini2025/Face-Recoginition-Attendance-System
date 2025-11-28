@@ -145,14 +145,20 @@ else:
 
         if face_encodings:
             for face_encoding, face_location in zip(face_encodings, face_locations):
-                # Use a stricter tolerance for face matching
-                TOLERANCE = 0.45
-                matches = face_recognition.compare_faces(st.session_state.known_encodings, face_encoding, tolerance=TOLERANCE)
-                face_distances = face_recognition.face_distance(st.session_state.known_encodings, face_encoding)
+                try:
+                    # Use a stricter tolerance for face matching
+                    TOLERANCE = 0.45
 
-                if len(face_distances) > 0:
-                    best_match_index = np.argmin(face_distances)
-                    if matches[best_match_index] and face_distances[best_match_index] < TOLERANCE:
+                    # If there are no known encodings yet, treat as unknown
+                    if not st.session_state.known_encodings:
+                        is_known = False
+                    else:
+                        matches = face_recognition.compare_faces(st.session_state.known_encodings, face_encoding, tolerance=TOLERANCE)
+                        face_distances = face_recognition.face_distance(st.session_state.known_encodings, face_encoding)
+                        is_known = len(face_distances) > 0 and matches[np.argmin(face_distances)] and face_distances[np.argmin(face_distances)] < TOLERANCE
+
+                    if is_known:
+                        best_match_index = np.argmin(face_distances)
                         name = st.session_state.known_names[best_match_index]
                         mark_attendance(name)
                         # Scale up face coordinates to original frame for drawing
@@ -167,16 +173,23 @@ else:
                         # ensure coordinates are ints and within frame bounds
                         h, w = frame.shape[:2]
                         top_i, right_i, bottom_i, left_i = max(0, top), min(w, right), min(h, bottom), max(0, left)
-                        try:
-                            crop = frame[top_i:bottom_i, left_i:right_i]
-                        except Exception:
+                        # Ensure slicing indices make sense
+                        if bottom_i <= top_i or right_i <= left_i:
                             crop = None
+                        else:
+                            try:
+                                crop = frame[top_i:bottom_i, left_i:right_i]
+                            except Exception:
+                                crop = None
 
                         # Encode crop to bytes so it can be stored in session state
                         image_bytes = None
                         if crop is not None and crop.size > 0:
-                            _, img_buf = cv2.imencode('.jpg', cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
-                            image_bytes = img_buf.tobytes()
+                            try:
+                                _, img_buf = cv2.imencode('.jpg', cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
+                                image_bytes = img_buf.tobytes()
+                            except Exception:
+                                image_bytes = None
 
                         # Create an id for this pending registration
                         pending_id = f"unknown_{int(time.time()*1000)}"
@@ -203,6 +216,8 @@ else:
                         # Draw a rectangle for unknown face (use scaled coords)
                         cv2.rectangle(frame, (left, top), (right, bottom), (0, 0, 255), 2)
                         cv2.putText(frame, "Unknown", (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+                except Exception as e:
+                    st.error(f"Error processing face: {e}")
 
         # Show the processed image (convert to RGB for st.image)
         st.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), caption="Processed Image")
