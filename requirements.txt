@@ -7,3 +7,5 @@ Pillow>=9.5.0
 pyttsx3>=2.90
 dlib>=19.24.0
 cmake>=3.25.0
+streamlit-webrtc>=0.61.0
+av>=10.0
