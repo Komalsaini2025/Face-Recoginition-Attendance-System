@@ -86,14 +86,14 @@ def register_new_face(face_encoding, name):
 
 # Streamlit UI
 st.title("Face Recognition Attendance System")
-st.write("Welcome to the Face Recognition Attendance App")
+st.write("Welcome to the Face Recognition Attendance System")
 
 # Use session state to ensure the welcome message is spoken only once
 if "has_spoken_welcome" not in st.session_state:
     st.session_state.has_spoken_welcome = False
 
 if not st.session_state.has_spoken_welcome:
-    speak("Welcome to the Face Recognition Attendance App")
+    speak("Welcome to the Face Recognition Attendance System")
     st.session_state.has_spoken_welcome = True
 
 if "known_encodings" not in st.session_state:
@@ -104,7 +104,6 @@ if "pending_registrations" not in st.session_state:
     # Each entry: {id: str, encoding: np.array, image_bytes: bytes, added_at: float}
     st.session_state.pending_registrations = []
 
-# Persist attendance and spoken names across reruns
 if "attendance_log" not in st.session_state:
     st.session_state.attendance_log = []
 if "spoken_names" not in st.session_state:
@@ -223,7 +222,6 @@ else:
                             if new_name:
                                 register_new_face(p['encoding'], new_name)
                                 mark_attendance(new_name)
-                                # remove from pending
                                 st.session_state.pending_registrations = [x for x in st.session_state.pending_registrations if x['id'] != p['id']]
                                 st.experimental_rerun()
                             else:
