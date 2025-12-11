@@ -258,6 +258,8 @@ else:
                             if new_name:
                                 register_new_face(p['encoding'], new_name)
                                 mark_attendance(new_name)
+                                # Immediately persist the newly marked attendance to CSV
+                                save_attendance()
                                 st.session_state.pending_registrations = [x for x in st.session_state.pending_registrations if x['id'] != p['id']]
                                 # Programmatic rerun with compatibility fallback
                                 safe_rerun()
