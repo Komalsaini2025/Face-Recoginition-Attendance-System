@@ -84,6 +84,42 @@ def register_new_face(face_encoding, name):
         pickle.dump((known_encodings, known_names), f)
     st.success(f"New face registered for {name}.")
 
+
+# Robust rerun helper to support multiple Streamlit versions
+def safe_rerun():
+    """Try to programmatically rerun the Streamlit script across versions.
+
+    Order of attempts:
+    1. Call `st.experimental_rerun()` if available.
+    2. Try importing and raising known runtime rerun exceptions.
+    3. Fallback to `st.stop()` to halt execution (best-effort fallback).
+    """
+    # Preferred public API
+    rerun_fn = getattr(st, "experimental_rerun", None)
+    if callable(rerun_fn):
+        try:
+            rerun_fn()
+            return
+        except Exception:
+            # If it exists but fails, continue to other fallbacks
+            pass
+
+    # Try common internal RerunException locations (best-effort)
+    try:
+        from streamlit.runtime.scriptrunner import RerunException
+        raise RerunException()
+    except Exception:
+        try:
+            from streamlit.script_runner import RerunException
+            raise RerunException()
+        except Exception:
+            # Final fallback: stop the script (safe)
+            try:
+                st.stop()
+            except Exception:
+                # As a last resort, do nothing
+                return
+
 # Streamlit UI
 st.title("Face Recognition Attendance System")
 st.write("Welcome to the Face Recognition Attendance System")
@@ -223,7 +259,8 @@ else:
                                 register_new_face(p['encoding'], new_name)
                                 mark_attendance(new_name)
                                 st.session_state.pending_registrations = [x for x in st.session_state.pending_registrations if x['id'] != p['id']]
-                                st.experimental_rerun()
+                                # Programmatic rerun with compatibility fallback
+                                safe_rerun()
                             else:
                                 st.warning("Please enter a name before registering.")
         else:
