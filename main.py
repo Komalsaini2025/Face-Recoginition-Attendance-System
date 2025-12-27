@@ -60,7 +60,7 @@ def mark_attendance(name):
 def save_attendance():
     attendance = st.session_state.attendance_log
     if not attendance:
-        st.warning("No attendance to save.")
+        st.warning("No attendance to saves.")
         return
 
     # Create DataFrame
