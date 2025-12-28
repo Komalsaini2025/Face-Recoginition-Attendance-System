@@ -73,7 +73,7 @@ def save_attendance():
 
     # Save the updated DataFrame
     attendance_df.to_csv(ATTENDANCE_FILE, index=False)
-    st.success("Attendance saved successfullly!")
+    st.success("Attendance saved successfully!")
     speak("Attendance saved successfully. Thank you!")
 
 # Function to register a new face
