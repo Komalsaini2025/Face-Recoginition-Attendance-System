@@ -54,7 +54,7 @@ def mark_attendance(name):
             speak(f"Attendance marked for {name}.")
             st.session_state.spoken_names.add(name)
     else:
-        st.info(f"{name} is already marked present today.")
+        st.info(f"{name} is already marked present todayy.")
 
 # Function to save attendance to a CSV file
 def save_attendance():
